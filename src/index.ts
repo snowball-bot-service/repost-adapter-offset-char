@@ -1,11 +1,29 @@
 import {
   Adapter,
-  AdapterContext, ParseLinkFailedException,
-  RepostAdapterRequestParams,
-  RepostAdapterResponsePayload, SocialProvider,
+  AdapterContext,
+  ParseLinkFailedException,
+  AdapterRepostRequestParams,
+  AdapterRepostResponsePayload,
+  SocialProvider,
+  AdapterProcessRequestParams,
+  AdapterProcessResponsePayload,
 } from '@snowball-bot/repost-adapter';
 import { HttpManager } from './utils/http';
-import {extractHandleId, extractURL, fetchHandleDataFromAPI} from "./manager";
+import {
+  DEPARTMENTS,
+  extractHandleId,
+  extractURL,
+  fetchHandleDataFromAPI,
+  parseShareCodeToBasicUsernameCode,
+} from './manager';
+import {
+  UnsupportedLanguageException,
+  UnsupportedMethodException,
+  UnsupportedProcessException,
+} from './utils/error';
+import { CharUC, FetchCharacterArchivePayload } from './offset-char/api.type';
+import dayjs from 'dayjs';
+import { OffsetDepartment } from './offset-char/character.type';
 
 export { HttpManager, HttpError } from './utils/http';
 export type {
@@ -41,16 +59,17 @@ interface AdapterOptions {
  * @param apiRetries API 重试次数
  */
 const CONST: {
-  apiBaseURL: string,
-  provider: SocialProvider,
-  apiTimeout: number,
-  apiRetries: number,
+  apiBaseURL: string;
+  provider: SocialProvider;
+  apiTimeout: number;
+  apiRetries: number;
 } = {
-  provider: "REPLACE_ME",
-  apiBaseURL: "https://example.com",
+  provider: 'offset-char',
+  apiBaseURL:
+    'https://insider-backend.wsm.ink',
   apiTimeout: 5000,
   apiRetries: 1,
-}
+};
 
 /**
  * 实例仓库
@@ -66,9 +85,9 @@ const adapter: Adapter = {
   manifest: {
     name: `repost-adapter-${CONST.provider}`,
     provider: CONST.provider,
-    whitelistHosts: ['example.com'],
+    whitelistHosts: ['oc.wsm.ink'],
     version: 1,
-    author: 'REPLACE_ME',
+    author: 'Rominwolf',
     billing: {
       text: 100,
       token: 100,
@@ -76,8 +95,8 @@ const adapter: Adapter = {
       green: 1,
     },
     providerInfo: {
-      name: 'REPLACE_ME',
-      icon: '✨',
+      name: '偏移国际组织角色档案',
+      icon: '📑',
       color: '#FFFFFF',
       bgColor: '#000000',
     }
@@ -107,7 +126,8 @@ const adapter: Adapter = {
     });
 
     // 注册转发请求处理器
-    ctx.on('onRepostRequest', (req) => handle(req, ctx, { apiKey }));
+    ctx.on('onRepostRequest', (req) => handleRepostRequest(req, ctx, {}));
+    ctx.on("onProcessRequest", (req) => handleProcessingRequest(req, ctx, {}));
 
     ctx.logger.info(`[${CONST.provider}] Adapter initialized.`);
   },
@@ -132,61 +152,118 @@ const adapter: Adapter = {
 //
 // ============================================================================
 
-async function handle(
-  req: RepostAdapterRequestParams,
+async function handleRepostRequest(
+  req: AdapterRepostRequestParams,
   ctx: AdapterContext,
-  options: AdapterOptions
-): Promise<RepostAdapterResponsePayload | null> {
-  ctx.logger.debug(`[${CONST.provider}] fetching ${req.source}`);
+  _options: AdapterOptions
+): Promise<AdapterRepostResponsePayload | null> {
+  const { helper, logger } = ctx;
 
-  // TODO: 1) 从 req.source 解析出 Handle Id
-  const [handleMethod, handleId] = extractHandleId(req.source, 1);
+  logger.debug(`[${CONST.provider}] fetching ${req.source}`);
 
-  // TODO: 2) 调用平台 API 拿到原始数据
-  const handleData = await fetchHandleDataFromAPI(INSTANCE.http!, handleMethod, handleId);
+  // 从 req.source 解析出 Handle Info
+  const [handleMethod, _username, _code] = extractHandleId(req.source);
 
-  const postId = "";
-  const publishAt = new Date();
+  // 不支持的转发模式
+  if (handleMethod === 'live' || handleMethod === "profile")
+    throw new UnsupportedMethodException(handleMethod, req.source);
 
-  const requesterUserId = "";
-  const requesterNickname = "";
+  const charUC: CharUC = { username: _username, code: _code! };
 
-  const authorNickname = "";
+  // 如果 username = s, 则表示为短链接
+  if (_username === "s") {
+    const shareCode = _code!; // 如果 username = s 则 _code 表示为 ShareCode
+    const { username, code } = await parseShareCodeToBasicUsernameCode(INSTANCE.http!, shareCode);
+    charUC.username = username;
+    charUC.code = code;
+  }
 
-  // TODO: 3) 转换成标准 response 格式
-  return {
-    code: req.code,
-    provider: CONST.provider,
-    originalUrl: req.source,
-    method: "post",
+  const handleId = `${charUC.username}/${charUC.code}`;
 
-    postId: postId,
-    publishAt: publishAt,
+  // 调用平台 API 拿到原始数据
+  const handleData = await fetchHandleDataFromAPI(
+    INSTANCE.http!,
+    handleMethod,
+    charUC.username,
+    charUC.code,
+  );
 
-    requester: {
-      userId: requesterUserId,
-      nickname: requesterNickname,
-    },
-    author: {
-      nickname: authorNickname,
-    },
+  // 函数：构建 Post
+  const fnBuildPost = (): Omit<
+    AdapterRepostResponsePayload,
+    'postId' | 'method' | 'code' | 'originalUrl' | 'provider' | 'requester'
+  > => {
+    const payload = handleData as FetchCharacterArchivePayload;
+    const { items, code } = payload;
+    logger.debug('Payload', payload);
+    const zh = items["zh"];
 
-    title: "",
-    content: `TODO: real content from ${req.source}`,
-    cover: "",
-    images: [],
-    overlayCoverBuffer: undefined,
-    child: undefined,
-    badges: [],
-    strawberry: undefined,
-    watermelon: undefined,
+    // 不支持的语言
+    if (!zh) throw new UnsupportedLanguageException(code, "zh");
 
-    useProxy: false,
-    useTranslator: false,
+    const {
+      lastEditAt,
+      breed, species, fullname,
+      department, position, introduction, welcome,
+      headshotURL, coverURL,
+      referenceURL,
+      layoutMain,
+    } = zh;
 
-    canvasWidth: undefined,
-    extra: undefined,
+    const showsCover = layoutMain.includes("banner");
+    const departmentName = helper.pick<OffsetDepartment, string>(DEPARTMENTS, department, "/");
+
+    return {
+      publishAt: dayjs.unix(lastEditAt).toDate(),
+
+      author: {
+        headshotUrl: headshotURL,
+        nickname: fullname,
+        userId: handleId,
+      },
+
+      cover: showsCover ? coverURL : undefined,
+
+      content: `「${welcome}」\n\n${introduction.value}`,
+
+      badges: [
+        [{ emoji: '🧰', name: `${departmentName} · ${position}` }],
+        [
+          { emoji: '🔷', name: `${species.name ?? '种族'} · ${species.value}` },
+          { emoji: '🔹', name: `${breed.name ?? '物种'} · ${breed.value}` },
+        ],
+      ],
+
+      images: referenceURL,
+    };
   };
+
+  // 转换成标准 response 格式
+  return {
+    method: handleMethod,
+    provider: CONST.provider,
+    code: req.code,
+    originalUrl: req.source,
+    requester: req.requester,
+
+    postId: handleId,
+
+    ...fnBuildPost(),
+  };
+}
+
+async function handleProcessingRequest(
+  req: AdapterProcessRequestParams,
+  ctx: AdapterContext,
+  _options: AdapterOptions
+): Promise<AdapterProcessResponsePayload | null> {
+  const { logger } = ctx;
+  const { method, source } = req;
+
+  logger.debug(`[${CONST.provider}] fetching ${method}: ${source}`);
+
+  // 抛出不支持的进程
+  throw new UnsupportedProcessException(method, source);
 }
 
 export default adapter;

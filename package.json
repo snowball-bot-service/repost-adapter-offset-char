@@ -1,8 +1,8 @@
 {
-  "name": "repost-adapter-REPLACE_ME",
-  "version": "0.1.0",
-  "description": "TODO: describe your adapter",
-  "author": "TODO: your name",
+  "name": "repost-adapter-offset-char",
+  "version": "1.0.0",
+  "description": "Offset Character Adapter",
+  "author": "Rominwolf",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -43,19 +43,20 @@
     "access": "public"
   },
   "dependencies": {
-    "@snowball-bot/repost-adapter": "^1.0.4"
+    "@snowball-bot/repost-adapter": "^1.0.8",
+    "dayjs": "^1.11.21"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
+    "dotenv": "^17.4.2",
     "eslint": "^9.0.0",
     "prettier": "^3.0.0",
     "tsup": "^8.5.0",
-    "typescript": "^6.0.0",
-    "vitest": "^2.0.0",
     "tsx": "^4.0.0",
-    "dotenv": "^17.4.2"
+    "typescript": "^6.0.0",
+    "vitest": "^2.0.0"
   },
   "engines": {
     "node": ">=18"
