@@ -21,7 +21,13 @@ import {
   UnsupportedMethodException,
   UnsupportedProcessException,
 } from './utils/error';
-import { CharUC, FetchCharacterArchivePayload } from './offset-char/api.type';
+import {
+  CharUC,
+  FetchCharacterArchivePayload,
+  OffsetCharSummary,
+  OffsetCharacters,
+  OffsetUserArchives,
+} from './offset-char/api.type';
 import dayjs from 'dayjs';
 import { OffsetDepartment } from './offset-char/character.type';
 
@@ -164,38 +170,49 @@ async function handleRepostRequest(
   // 从 req.source 解析出 Handle Info
   const [handleMethod, _username, _code] = extractHandleId(req.source);
 
+  // 不支持的解析类型，直接返回 null
+  if (!handleMethod) return null;
+
   // 不支持的转发模式
-  if (handleMethod === 'live' || handleMethod === "profile")
+  if (handleMethod === 'live')
     throw new UnsupportedMethodException(handleMethod, req.source);
 
-  const charUC: CharUC = { username: _username, code: _code! };
+  const charUC: CharUC = { username: _username, code: _code ?? "" };
 
-  // 如果 username = s, 则表示为短链接
-  if (_username === "s") {
+  // 如果 username = s, 则表示为短链接 (仅 post 单角色形态)
+  if (handleMethod === 'post' && _username === "s") {
     const shareCode = _code!; // 如果 username = s 则 _code 表示为 ShareCode
     const { username, code } = await parseShareCodeToBasicUsernameCode(INSTANCE.http!, shareCode);
     charUC.username = username;
     charUC.code = code;
   }
 
-  const handleId = `${charUC.username}/${charUC.code}`;
-
   // 调用平台 API 拿到原始数据
+  // post: username & code 都存在 -> 单角色档案; 都为空 -> 站点级全站角色摘要
+  // profile: 仅 username -> 用户信息及其角色摘要
   const handleData = await fetchHandleDataFromAPI(
     INSTANCE.http!,
     handleMethod,
     charUC.username,
-    charUC.code,
+    charUC.code || undefined,
   );
 
-  // 函数：构建 Post
-  const fnBuildPost = (): Omit<
+  logger.debug('Payload', handleData);
+
+  // 渠道不支持 / 无数据
+  if (!handleData) return null;
+
+  type BuiltPost = Omit<
     AdapterRepostResponsePayload,
     'postId' | 'method' | 'code' | 'originalUrl' | 'provider' | 'requester'
-  > => {
-    const payload = handleData as FetchCharacterArchivePayload;
+  >;
+
+  // 函数：构建 单角色档案 Post
+  const fnBuildArchivePost = (
+    payload: FetchCharacterArchivePayload,
+    postId: string,
+  ): BuiltPost => {
     const { items, code } = payload;
-    logger.debug('Payload', payload);
     const zh = items["zh"];
 
     // 不支持的语言
@@ -219,7 +236,7 @@ async function handleRepostRequest(
       author: {
         headshotUrl: headshotURL,
         nickname: fullname,
-        userId: handleId,
+        userId: postId,
       },
 
       cover: showsCover ? coverURL : undefined,
@@ -238,6 +255,117 @@ async function handleRepostRequest(
     };
   };
 
+  // 摘要列表 Post 的公共字段 (发布时间 / 封面 / 徽章)，纯文本展示, 不附带角色图片
+  const summaryCommons = (
+    summaries: OffsetCharSummary[],
+    author: { nickname: string; userId: string },
+    content: string,
+  ): BuiltPost => ({
+    // 取最新编辑时间作为发布时间
+    publishAt: (() => {
+      const latest = summaries.reduce((max, s) => Math.max(max, s.lastEditAt), 0);
+      return latest ? dayjs.unix(latest).toDate() : undefined;
+    })(),
+
+    author,
+
+    // cover: summaries.find((s) => s.coverURL)?.coverURL,
+
+    content,
+
+    badges: [[{ emoji: '👥', name: `${summaries.length} 位角色` }]],
+  });
+
+  const DOT = " · ";
+
+  // 函数：用户级 - 平铺
+  const fnBuildProfilePost = (
+    summaries: OffsetCharSummary[],
+    author: { nickname: string; userId: string },
+  ): BuiltPost => {
+    const lines = summaries.map((s) => {
+      const link = s.shareCode ? `/s/${s.shareCode}` : `/${s.username}/${s.code}`;
+      const departmentName = helper.pick<OffsetDepartment, string>(DEPARTMENTS, s.department, "/");
+      const role = `${departmentName}${s.position ? ` · ${s.position}` : ''}`;
+      const parts = [
+        "【", s.fullname, "】", link, "\n",
+        role, "\n",
+        "「", s.welcome, "」",
+      ];
+      return parts.filter(Boolean).join('');
+    });
+
+    return summaryCommons(
+      summaries,
+      author,
+      lines.join('\n\n'),
+    );
+  };
+
+  // 函数：站点级 - 按部门分组
+  const fnBuildSitePost = (
+    summaries: OffsetCharSummary[],
+    author: { nickname: string; userId: string },
+  ): BuiltPost => {
+    // 分组
+    const grouped = new Map<OffsetDepartment, OffsetCharSummary[]>();
+    for (const s of summaries) {
+      if (!grouped.has(s.department)) grouped.set(s.department, []);
+      grouped.get(s.department)!.push(s);
+    }
+
+    // 按 DEPARTMENTS 既定顺序输出, 未知部门置于末尾
+    const order = Object.keys(DEPARTMENTS) as OffsetDepartment[];
+    const sortedDepts = [...grouped.keys()].sort(
+      (a, b) => (order.indexOf(a) + 1 || Infinity) - (order.indexOf(b) + 1 || Infinity),
+    );
+
+    const blocks = sortedDepts.map((dept) => {
+      const departmentName = helper.pick<OffsetDepartment, string>(DEPARTMENTS, dept, "/");
+      const lines = grouped.get(dept)!.map((s) => {
+        const link = s.shareCode ? `/s/${s.shareCode}` : `/${s.username}/${s.code}`;
+        const role = `${s.position ? ` · ${s.position}` : ''}`;
+        const parts = [
+          "// ", s.fullname, " · ", role, " · ", link,
+        ];
+        return parts.filter(Boolean).join('');
+      });
+      return `【${departmentName}】\n${lines.join('\n')}`;
+    });
+
+    return summaryCommons(
+      summaries,
+      author,
+      blocks.join('\n\n'),
+    );
+  };
+
+  // 按 handleData 形状分派构建逻辑
+  let postId: string;
+  let built: BuiltPost;
+
+  if ('items' in handleData) {
+    // 单角色档案
+    postId = `${charUC.username}/${charUC.code}`;
+    built = fnBuildArchivePost(handleData, postId);
+  } else if ('user' in handleData) {
+    // 用户信息及其角色摘要 (平铺)
+    const data = handleData as OffsetUserArchives;
+    postId = data.user.code;
+    built = fnBuildProfilePost(data.characters, {
+      nickname: data.user.code,
+      userId: data.user.code,
+    });
+  } else {
+    // 站点级全站角色摘要 (按部门分组)
+    const data = handleData as OffsetCharacters;
+    postId = "/";
+    built = fnBuildSitePost(data.characters, {
+      nickname: adapter.manifest.providerInfo?.name ?? CONST.provider,
+      userId: "offset-chars",
+    });
+  }
+
   // 转换成标准 response 格式
   return {
     method: handleMethod,
@@ -246,9 +374,9 @@ async function handleRepostRequest(
     originalUrl: req.source,
     requester: req.requester,
 
-    postId: handleId,
+    postId,
 
-    ...fnBuildPost(),
+    ...built,
   };
 }
 

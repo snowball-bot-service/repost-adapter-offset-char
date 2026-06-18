@@ -1,6 +1,16 @@
 import { RepostMethod } from '@snowball-bot/repost-adapter';
-import { CharUC, FetchCharacterArchivePayload } from './offset-char/api.type';
-import { fetchCharacterArchive, fetchShare } from './offset-char/offset-char.api';
+import {
+  CharUC,
+  FetchCharacterArchivePayload,
+  FetchCharactersPayload,
+  FetchUserPayload,
+} from './offset-char/api.type';
+import {
+  fetchCharacterArchive,
+  fetchCharacters,
+  fetchShare,
+  fetchUser,
+} from './offset-char/offset-char.api';
 import { HttpManager } from './utils/http';
 import { NotCharShareException } from './utils/error';
 import { OffsetDepartment } from './offset-char/character.type';
@@ -11,8 +21,10 @@ export type ShareCode = string;
 export type S = 's';
 
 type RepostMethodPayloadMap = {
-  post: FetchCharacterArchivePayload;
-  profile: null;
+  // username + code -> 单角色档案; username & code 均为空 -> 全站角色摘要 (暂归 post)
+  post: FetchCharacterArchivePayload | FetchCharactersPayload;
+  // 仅 username -> 用户信息及其角色摘要
+  profile: FetchUserPayload;
   live: null;
 };
 
@@ -22,17 +34,21 @@ type RepostMethodPayloadMap = {
  * 每一项要么是对应的抓取函数, 要么是 `null` (表示该渠道不支持此 method)。
  * `satisfies` 在此处校验每个 handler 的返回类型与 {@link RepostMethodPayloadMap}
  * 对应项一致；任何不匹配都会在此对象上直接报错，而非在调用处。
+ *
+ * 注意: `post` 同时承载「单角色档案」与「全站角色摘要」两种 handle 态:
+ * 当 username & code 均存在时拉取单角色档案, 均为空时拉取全站摘要。
  */
 const PAYLOAD_FETCHERS = {
-  post: fetchCharacterArchive,
-  profile: null,
+  post: (http: HttpManager, username: string, code?: string) =>
+    username && code ? fetchCharacterArchive(http, username, code) : fetchCharacters(http, "zh"),
+  profile: (http: HttpManager, username: string) => fetchUser(http, username, "zh"),
   live: null,
 } satisfies {
   [M in RepostMethod]:
     | ((
         http: HttpManager,
         username: string,
-        code: string,
+        code?: string,
       ) => Promise<RepostMethodPayloadMap[M]>)
     | null;
 };
@@ -64,9 +80,10 @@ export function extractURL(source: string) {
  * @param source 原始 URL
  * @example Path: /rominwolf/romin => [post, rominwolf, romin]
  * @example Path: /s/romin => [post, s, romin]
- * @example Path: /rominwolf => [post, rominwolf]
+ * @example Path: /rominwolf => [profile, rominwolf]
+ * @example Path: / => [post, ""] (站点级全站角色摘要)
  */
-export function extractHandleId(source: string): [RepostMethod, string, string?] {
+export function extractHandleId(source: string): [RepostMethod | null, string, string?] {
   const { pathname } = extractURL(source);
   const paths = pathname.split('/') as [Username | S, string?];
 
@@ -77,9 +94,17 @@ export function extractHandleId(source: string): [RepostMethod, string, string?]
 
   const [username, code] = paths;
 
-  if (code) return ["post", username, code];
+  // Post method: 单角色档案
+  if (username && code) return ["post", username, code];
 
-  return ["profile", username];
+  // Profile method: 用户信息及其角色摘要
+  if (username && !code) return ["profile", username];
+
+  // Post method (站点级): username & code 均为空 -> 全站角色摘要 (暂归 post, 未来或迁移到 site)
+  if (!username && !code) return ["post", ""];
+
+  // 不支持的解析类型
+  return [null, "/"];
 }
 
 /**

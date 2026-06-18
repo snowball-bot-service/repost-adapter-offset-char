@@ -82,6 +82,33 @@ export class UnavailableArchiveException extends SnowballException {
 }
 
 /**
+ * 用户不可用错误
+ *
+ * 对应 OFFSET:CHAR:INVALID_USER / OFFSET:CHAR:FETCH_USER_FAILED
+ */
+export class UnavailableUserException extends SnowballException {
+  constructor(
+    public readonly username: string,
+    public readonly reason?: unknown,
+  ) {
+    super(`Unavailable User Exception | Username: ${username} | Reason: ${reason}`);
+  }
+}
+
+/**
+ * 全站角色摘要不可用错误
+ *
+ * 对应 OFFSET:CHAR:FETCH_CHARACTERS_FAILED
+ */
+export class UnavailableCharactersException extends SnowballException {
+  constructor(
+    public readonly reason?: unknown,
+  ) {
+    super(`Unavailable Characters Exception | Reason: ${reason}`);
+  }
+}
+
+/**
  * 分享码不可用错误
  */
 export class UnavailableShareException extends SnowballException {

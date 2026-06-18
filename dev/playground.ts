@@ -11,8 +11,10 @@ async function main() {
 
   // 测试 URL 列表：随便改、随便加
   const testUrls = [
-    'https://oc.wsm.ink/rominwolf/romin',
-    'https://oc.wsm.ink/s/amo',
+    // 'https://oc.wsm.ink/rominwolf/romin',
+    // 'https://oc.wsm.ink/s/amo',
+    'https://oc.wsm.ink/rominwolf',
+    'https://oc.wsm.ink',
   ];
 
   for (const url of testUrls) {
