@@ -324,7 +324,7 @@ async function handleRepostRequest(
       const departmentName = helper.pick<OffsetDepartment, string>(DEPARTMENTS, dept, "/");
       const lines = grouped.get(dept)!.map((s) => {
         const link = s.shareCode ? `/s/${s.shareCode}` : `/${s.username}/${s.code}`;
-        const role = `${s.position ? ` · ${s.position}` : ''}`;
+        const role = s.position || '';
         const parts = [
           "// ", s.fullname, " · ", role, " · ", link,
         ];
