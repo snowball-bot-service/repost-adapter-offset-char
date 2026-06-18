@@ -258,7 +258,7 @@ async function handleRepostRequest(
   // 摘要列表 Post 的公共字段 (发布时间 / 封面 / 徽章)，纯文本展示, 不附带角色图片
   const summaryCommons = (
     summaries: OffsetCharSummary[],
-    author: { nickname: string; userId: string },
+    author: AdapterRepostResponsePayload["author"],
     content: string,
   ): BuiltPost => ({
     // 取最新编辑时间作为发布时间
@@ -276,20 +276,17 @@ async function handleRepostRequest(
     badges: [[{ emoji: '👥', name: `${summaries.length} 位角色` }]],
   });
 
-  const DOT = " · ";
-
   // 函数：用户级 - 平铺
   const fnBuildProfilePost = (
     summaries: OffsetCharSummary[],
-    author: { nickname: string; userId: string },
+    author: AdapterRepostResponsePayload["author"],
   ): BuiltPost => {
     const lines = summaries.map((s) => {
       const link = s.shareCode ? `/s/${s.shareCode}` : `/${s.username}/${s.code}`;
       const departmentName = helper.pick<OffsetDepartment, string>(DEPARTMENTS, s.department, "/");
       const role = `${departmentName}${s.position ? ` · ${s.position}` : ''}`;
       const parts = [
-        "【", s.fullname, "】", link, "\n",
-        role, "\n",
+        "// ", s.fullname, " · ", role, " · ", link, "\n",
         "「", s.welcome, "」",
       ];
       return parts.filter(Boolean).join('');
@@ -305,7 +302,7 @@ async function handleRepostRequest(
   // 函数：站点级 - 按部门分组
   const fnBuildSitePost = (
     summaries: OffsetCharSummary[],
-    author: { nickname: string; userId: string },
+    author: AdapterRepostResponsePayload["author"],
   ): BuiltPost => {
     // 分组
     const grouped = new Map<OffsetDepartment, OffsetCharSummary[]>();
@@ -353,8 +350,9 @@ async function handleRepostRequest(
     const data = handleData as OffsetUserArchives;
     postId = data.user.code;
     built = fnBuildProfilePost(data.characters, {
-      nickname: data.user.code,
+      nickname: data.user.nickname || data.user.code,
       userId: data.user.code,
+      headshotUrl: data.user.headshotURL,
     });
   } else {
     // 站点级全站角色摘要 (按部门分组)

@@ -66,7 +66,7 @@ export type OffsetCharacters = {
 /** 接口 2 (GET /offset/chars/users/:username) 返回数据 */
 export type OffsetUserArchives = {
   characters: OffsetCharSummary[];
-  user: { code: string };
+  user: { code: string; headshotURL?: string; nickname?: string; };
 };
 
 export type FetchCharactersPayload = OffsetCharacters;
