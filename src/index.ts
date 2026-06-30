@@ -244,14 +244,16 @@ async function handleRepostRequest(
       content: `「${welcome}」\n\n${introduction.value}`,
 
       badges: [
-        [{ emoji: '🧰', name: `${departmentName} · ${position}` }],
+        [
+          { emoji: '🧰', name: `${departmentName} · ${position}` }
+        ],
         [
           { emoji: '🔷', name: `${species.name ?? '种族'} · ${species.value}` },
           { emoji: '🔹', name: `${breed.name ?? '物种'} · ${breed.value}` },
         ],
       ],
 
-      images: referenceURL,
+      images: referenceURL ? [ referenceURL[0] ] : undefined,
     };
   };
 
